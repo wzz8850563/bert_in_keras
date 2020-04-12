@@ -145,40 +145,42 @@ class data_generator:
             for i in idxs:
                 d = self.data[i]
                 text = d['text'][:maxlen]
-                tokens = tokenizer.tokenize(text)
+                tokens = tokenizer.tokenize(text)#文本编码
                 items = {}
                 for sp in d['spo_list']:
-                    sp = (tokenizer.tokenize(sp[0])[1:-1], sp[1], tokenizer.tokenize(sp[2])[1:-1])
+                    sp = (tokenizer.tokenize(sp[0])[1:-1], sp[1], tokenizer.tokenize(sp[2])[1:-1])#三元组（s，r，o）
                     subjectid = list_find(tokens, sp[0])
                     objectid = list_find(tokens, sp[2])
                     if subjectid != -1 and objectid != -1:
-                        key = (subjectid, subjectid+len(sp[0]))
+                        key = (subjectid, subjectid+len(sp[0]))#返回实体在文本位置，二元组（start,end）
                         if key not in items:
                             items[key] = []
                         items[key].append((objectid,
                                            objectid+len(sp[2]),
-                                           predicate2id[sp[1]]))
-                if items:
+                                           predicate2id[sp[1]]))#每个key(s实体)包含所有o实体以及关系
+                #下面才时开始编码
+                if items:#
                     t1, t2 = tokenizer.encode(first=text)
-                    T1.append(t1)
-                    T2.append(t2)
-                    s1, s2 = np.zeros(len(tokens)), np.zeros(len(tokens))
-                    for j in items:
+                    T1.append(t1)#文本向量
+                    T2.append(t2)#句子文职向量
+                    s1, s2 = np.zeros(len(tokens)), np.zeros(len(tokens))#每个实体用二维向量表示
+                    for j in items:#j是key,s实体（start，end）
                         s1[j[0]] = 1
                         s2[j[1]-1] = 1
-                    k1, k2 = np.array(items.keys()).T
+                    #随机抽取一个实体    
+                    k1, k2 = np.array(items.keys()).T #k1 start 位置集合，k1 end 位置集合
                     k1 = choice(k1)
                     k2 = choice(k2[k2 >= k1])
-                    o1, o2 = np.zeros((len(tokens), num_classes)), np.zeros((len(tokens), num_classes))
+                    o1, o2 = np.zeros((len(tokens), num_classes)), np.zeros((len(tokens), num_classes))#len(tokens)* num_classes向量，o编码向量
                     for j in items.get((k1, k2), []):
                         o1[j[0]][j[2]] = 1
                         o2[j[1]-1][j[2]] = 1
-                    S1.append(s1)
-                    S2.append(s2)
-                    K1.append([k1])
-                    K2.append([k2-1])
-                    O1.append(o1)
-                    O2.append(o2)
+                    S1.append(s1)#s start  向量
+                    S2.append(s2)#s end  向量
+                    K1.append([k1])#随机抽取s start s_id
+                    K2.append([k2-1])#随机抽取s end  s_id
+                    O1.append(o1)#o start
+                    O2.append(o2)#o end
                     if len(T1) == self.batch_size or i == idxs[-1]:
                         T1 = seq_padding(T1)
                         T2 = seq_padding(T2)
@@ -198,17 +200,17 @@ from keras.callbacks import Callback
 from keras.optimizers import Adam
 
 
-def seq_gather(x):
-    """seq是[None, seq_len, s_size]的格式，
+def seq_gather(x):#idxs是不是二元组，一个s的start和end在idxs里面是两个数
+    """seq是[None, seq_len, s_size]的格式，也就是bert返回的层的输出结果，s_size为定义bert维度，比如768
     idxs是[None, 1]的格式，在seq的第i个序列中选出第idxs[i]个向量，
     最终输出[None, s_size]的向量。
     """
-    seq, idxs = x
+    seq, idxs = x#idx为（batchsize,2）的形式
     idxs = K.cast(idxs, 'int32')
     batch_idxs = K.arange(0, K.shape(seq)[0])
     batch_idxs = K.expand_dims(batch_idxs, 1)
-    idxs = K.concatenate([batch_idxs, idxs], 1)
-    return K.tf.gather_nd(seq, idxs)
+    idxs = K.concatenate([batch_idxs, idxs], 1)#如果idxs为array([[2,4],[5,8],[10,13]]，返回类似array([[ 0,  2,  4],[ 1,  5,  8],[ 2, 10, 13]], dtype=int32) 形式，
+    return K.tf.gather_nd(seq, idxs)#注意稀释se
 
 
 bert_model = load_trained_model_from_checkpoint(config_path, checkpoint_path, seq_len=None)
@@ -227,19 +229,19 @@ o1_in = Input(shape=(None, num_classes))
 o2_in = Input(shape=(None, num_classes))
 
 t1, t2, s1, s2, k1, k2, o1, o2 = t1_in, t2_in, s1_in, s2_in, k1_in, k2_in, o1_in, o2_in
-mask = Lambda(lambda x: K.cast(K.greater(K.expand_dims(x, 2), 0), 'float32'))(t1)
+mask = Lambda(lambda x: K.cast(K.greater(K.expand_dims(x, 2), 0), 'float32'))(t1)#t1文本向量编码，
 
 t = bert_model([t1, t2])
-ps1 = Dense(1, activation='sigmoid')(t)
+ps1 = Dense(1, activation='sigmoid')(t)#这里是预测一个位置的结果
 ps2 = Dense(1, activation='sigmoid')(t)
 
 subject_model = Model([t1_in, t2_in], [ps1, ps2]) # 预测subject的模型
 
 
-k1v = Lambda(seq_gather)([t, k1])
-k2v = Lambda(seq_gather)([t, k2])
-kv = Average()([k1v, k2v])
-t = Add()([t, kv])
+k1v = Lambda(seq_gather)([t, k1])#从bert结果向量找出s start 对应的向量
+k2v = Lambda(seq_gather)([t, k2])#从bert结果向量找出s end 对应的向量
+kv = Average()([k1v, k2v])#向量取平均
+t = Add()([t, kv])#将平均后的实体向量值和bert向量值相加
 po1 = Dense(num_classes, activation='sigmoid')(t)
 po2 = Dense(num_classes, activation='sigmoid')(t)
 
@@ -247,7 +249,7 @@ object_model = Model([t1_in, t2_in, k1_in, k2_in], [po1, po2]) # 输入text和su
 
 
 train_model = Model([t1_in, t2_in, s1_in, s2_in, k1_in, k2_in, o1_in, o2_in],
-                    [ps1, ps2, po1, po2])
+                    [ps1, ps2, po1, po2])#subject_model，object_model用于预测，train_model才是用于训练的
 
 s1 = K.expand_dims(s1, 2)
 s2 = K.expand_dims(s2, 2)
